@@ -1,6 +1,8 @@
 """按「登录配置」逐行登录，处理共享盘“待处理”目录中的土地使用税文件。"""
 
 import re
+import shutil
+from datetime import datetime
 from pathlib import Path
 
 from config.config_loader import ConfigError
@@ -11,10 +13,19 @@ from utils.credentials import CredentialNotFoundError, read_windows_credential
 from web.browser import BrowserManager
 from workflows.land_tax_flow.land_tax import LandUseTaxFlow
 from workflows.land_tax_flow.login_task import JDELoginTask
+from workflows.land_tax_flow.run_report import (
+    append_run_result,
+    build_notification_message,
+    notify_wechat_robots,
+    result_file_path,
+)
 
 RUN_SHEET = "登录配置"
 REQUIRED_COLUMNS = ("window凭据", "凭据账号", "共享盘路径")
 PENDING_DIR_KEY = "土地使用税配置.待处理目录"
+PROCESSED_DIR_KEY = "土地使用税配置.已处理目录"
+SUCCESS_DIR = "成功"
+FAILED_DIR = "失败"
 FILE_PATTERN = re.compile(
     r"^(?P<company>.+?)-(?P<period>\d{6})-土地使用税\.(?P<ext>xlsx|xls)$",
     re.IGNORECASE,
@@ -121,6 +132,10 @@ class JDEMainTask(TaskBase):
         if not pending.is_dir():
             raise ConfigError(f"共享盘缺少待处理目录：{pending}")
 
+        processed = Path(str(config.get(PROCESSED_DIR_KEY, "已处理") or "已处理").strip())
+        if not processed.is_absolute():
+            processed = shared_path / processed
+
         try:
             username, _ = read_windows_credential(values["window凭据"])
         except CredentialNotFoundError:
@@ -140,7 +155,7 @@ class JDEMainTask(TaskBase):
             config.set(key, value)
         logger.info(
             f"运行参数：凭据={values['window凭据']} 账号={values['凭据账号']} "
-            f"公司={company} 共享盘={shared_path} 待处理={pending}"
+            f"公司={company} 共享盘={shared_path} 待处理={pending} 已处理={processed}"
         )
         return {
             "credential": values["window凭据"],
@@ -148,7 +163,45 @@ class JDEMainTask(TaskBase):
             "short_name": short_name,
             "shared_path": shared_path,
             "pending": pending,
+            "success_dir": processed / SUCCESS_DIR,
+            "failed_dir": processed / FAILED_DIR,
         }
+
+    def _record(self, record):
+        """把单个文件的运行结果写入年度结果表；写入失败只记日志，不影响主流程。"""
+        try:
+            append_run_result(self.context.config, record)
+        except Exception as exc:
+            logger.warning(f"运行结果表写入失败：{exc}")
+
+    def _notify(self, info, records, result_path):
+        """按共享盘维度汇总本次结果并发送企业微信通知。"""
+        success = sum(1 for record in records if record["运行结果"] == "成功")
+        periods = "、".join(sorted({str(record["会计期间"]) for record in records}))
+        message = build_notification_message(
+            info["short_name"],
+            periods,
+            len(records),
+            success,
+            len(records) - success,
+            result_path.name,
+        )
+        notify_wechat_robots(self.context.config, message, result_path)
+
+    def _move(self, path: Path, target_dir: Path, failures):
+        """把已处理文件移入结果目录；重名时追加序号，避免覆盖历史文件。"""
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+            target = target_dir / path.name
+            index = 1
+            while target.exists():
+                target = target_dir / f"{path.stem}_{index}{path.suffix}"
+                index += 1
+            shutil.move(str(path), str(target))
+            logger.info(f"已移动文件：{path.name} -> {target}")
+        except Exception as exc:
+            failures.append(f"{path.name} 移动失败：{exc}")
+            logger.exception(f"{path.name} 移动失败：{exc}")
 
     def _screenshot(self, browser, info, company="", period=""):
         page = browser.get_page() if browser else None
@@ -169,6 +222,8 @@ class JDEMainTask(TaskBase):
             return
 
         config = self.context.config
+        result_path = result_file_path(config)
+        records = []
         browser = BrowserManager(headless=read_headless(config.get("JDE配置.headless", False)))
         self.context.set_browser("JDE", browser)
         failures = []
@@ -186,18 +241,33 @@ class JDEMainTask(TaskBase):
                 self.context.set("land_tax_status", None)
                 self.context.set("land_tax_summary", None)
                 self.context.set("jde_journal_batch", None)
+                started = datetime.now()
                 try:
                     LandUseTaxFlow(self.context).run(path, company, period)
-                    logger.info(
-                        f"{path.name} 处理完成，JDE 批号："
-                        f"{self.context.get('jde_journal_batch') or ''}"
-                    )
+                    batch = str(self.context.get("jde_journal_batch") or "")
+                    logger.info(f"{path.name} 处理完成，JDE 批号：{batch}")
+                    self._move(path, info["success_dir"], failures)
+                    outcome, error = "成功", ""
                 except Exception as exc:
                     failures.append(f"{path.name}：{exc}")
                     logger.exception(f"{path.name} 处理失败：{exc}")
                     self._screenshot(browser, info, company, period)
+                    self._move(path, info["failed_dir"], failures)
+                    batch, outcome, error = "", "失败", str(exc)
+                records.append({
+                    "会计期间": period,
+                    "公司": company,
+                    "分录批号": batch,
+                    "运行结果": outcome,
+                    "异常情况": error,
+                    "运行开始时间": started,
+                    "运行结束时间": datetime.now(),
+                })
+                self._record(records[-1])
         finally:
             self.context.close_all_browsers()
 
+        if records:
+            self._notify(info, records, result_path)
         if failures:
             raise ConfigError("以下土地使用税文件处理失败：" + "；".join(failures))
