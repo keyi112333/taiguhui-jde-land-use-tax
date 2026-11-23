@@ -26,8 +26,9 @@ PENDING_DIR_KEY = "土地使用税配置.待处理目录"
 PROCESSED_DIR_KEY = "土地使用税配置.已处理目录"
 SUCCESS_DIR = "成功"
 FAILED_DIR = "失败"
+TAX_TYPE = "土地使用税"
 FILE_PATTERN = re.compile(
-    r"^(?P<company>.+?)-(?P<period>\d{6})-土地使用税\.(?P<ext>xlsx|xls)$",
+    r"^(?P<tax_type>\S+)\s+(?P<company>.+?)\s+(?P<period>\d{6})\.(?P<ext>xlsx|xls)$",
     re.IGNORECASE,
 )
 
@@ -64,7 +65,7 @@ def find_pending_files(directory: Path):
         if not path.is_file() or path.name.startswith("~$"):
             continue
         match = FILE_PATTERN.match(path.name)
-        if match is None:
+        if match is None or match.group("tax_type") != TAX_TYPE:
             continue
         period = match.group("period")
         month = int(period[4:6])
@@ -74,7 +75,7 @@ def find_pending_files(directory: Path):
         key = (company.lower(), period)
         if key in seen:
             raise ConfigError(
-                f"待处理目录中 {company}-{period} 同时存在多个土地使用税文件："
+                f"待处理目录中 {company} {period} 同时存在多个土地使用税文件："
                 f"{seen[key].name}、{path.name}"
             )
         seen[key] = path
