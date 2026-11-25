@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 cd /d "%~dp0"
 
 if exist ".venv\Scripts\python.exe" (
@@ -8,15 +7,15 @@ if exist ".venv\Scripts\python.exe" (
     set "PY=python"
 )
 
-echo 正在启动 JDE 土地使用税流程...
+echo Starting JDE land use tax flow...
 "%PY%" main.py
 set "EXITCODE=%ERRORLEVEL%"
 
 echo.
 if "%EXITCODE%"=="0" (
-    echo 运行完成。
+    echo Completed.
 ) else (
-    echo 运行失败，退出码：%EXITCODE%
+    echo Failed, exit code: %EXITCODE%
 )
 pause
 exit /b %EXITCODE%
