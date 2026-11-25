@@ -25,11 +25,32 @@ from workflows.land_tax_flow.run_report import (
 
 RUN_SHEET = "登录配置"
 REQUIRED_COLUMNS = ("window凭据", "凭据账号", "共享盘路径")
-TEMPLATE_NAME = "土地使用税计税表 {company}.xlsx"
+TEMPLATE_NAME = "土地使用税计税表 {company}"
+TEMPLATE_SUFFIXES = (".xlsx", ".xls")
 
 
 class SkipRun(Exception):
     """当前行凭据未配置，跳过该行且不计入失败。"""
+
+
+def find_template(shared_path, company):
+    """在共享盘查找模板，兼容 .xlsx 与 .xls；两种格式同时存在时优先使用 .xlsx。"""
+    found = []
+    for suffix in TEMPLATE_SUFFIXES:
+        candidate = Path(shared_path) / f"{TEMPLATE_NAME.format(company=company)}{suffix}"
+        if candidate.is_file():
+            found.append(candidate)
+    if not found:
+        names = "、".join(
+            f"{TEMPLATE_NAME.format(company=company)}{suffix}" for suffix in TEMPLATE_SUFFIXES
+        )
+        raise ConfigError(f"共享盘缺少模板：{Path(shared_path)} 下未找到 {names}")
+    if len(found) > 1:
+        logger.warning(
+            f"共享盘存在多个模板，使用 {found[0].name}，忽略 "
+            f"{'、'.join(item.name for item in found[1:])}"
+        )
+    return found[0]
 
 
 def parse_shared_path(value):
@@ -178,9 +199,7 @@ class JDEMainTask(TaskBase):
         shared_path, short_name, code = parse_shared_path(values["共享盘路径"])
         if not shared_path.is_dir():
             raise ConfigError(f"共享盘路径不存在：{shared_path}")
-        template = shared_path / TEMPLATE_NAME.format(company=short_name)
-        if not template.is_file():
-            raise ConfigError(f"共享盘缺少模板：{template}")
+        template = find_template(shared_path, short_name)
 
         try:
             username, _ = read_windows_credential(values["window凭据"])

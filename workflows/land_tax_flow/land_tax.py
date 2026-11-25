@@ -33,7 +33,7 @@ LAND_AREA_HEADER = "土地面积"
 JOURNAL_HEADERS = ("帐号", "借项金额", "贷项金额", "备注")
 HEADER_ALIASES = {"账号": "帐号"}
 DATE_FORMAT = "yyyy-m-d"
-OUTPUT_NAME = "土地使用税计税表 {company} {period}.xlsx"
+OUTPUT_NAME = "土地使用税计税表 {company} {period}{suffix}"
 INVALID_FILE_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
@@ -247,7 +247,7 @@ class LandUseTaxFlow:
         return first
 
     def template_path(self):
-        """共享盘模板「土地使用税计税表 {公司简称}.xlsx」。"""
+        """共享盘模板路径，兼容 .xlsx 与 .xls。"""
         raw = self.get("模板文件")
         if raw is None or not str(raw).strip():
             raise ConfigError("土地使用税配置.模板文件 未配置")
@@ -259,7 +259,7 @@ class LandUseTaxFlow:
         return template
 
     def output_path(self, template):
-        """本期生成表：土地使用税计税表 {公司简称} {YYYYMM}.xlsx。"""
+        """本期生成表：土地使用税计税表 {公司简称} {YYYYMM}，扩展名与模板一致（.xls/.xlsx）。"""
         company = str(self.get("公司", "") or "").strip()
         if not company or INVALID_FILE_CHARS.search(company):
             raise ConfigError("土地使用税配置.公司 必填且不能包含文件名非法字符")
@@ -267,7 +267,9 @@ class LandUseTaxFlow:
         output_dir = Path(str(self.get("输出目录") or self.config.get_path("output")))
         if not output_dir.is_absolute():
             output_dir = self.config.get_path("output") / output_dir
-        destination = output_dir / OUTPUT_NAME.format(company=company, period=period)
+        destination = output_dir / OUTPUT_NAME.format(
+            company=company, period=period, suffix=template.suffix.lower()
+        )
         if destination.resolve() == template.resolve():
             raise ConfigError(f"生成文件不能与模板重合：{destination}")
         return destination
