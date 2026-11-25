@@ -93,9 +93,9 @@ def read_workbook(path: Path, engine: str = DEFAULT_ENGINE) -> WorkbookData:
     """只读打开工作簿，重算后读取各工作表已用区域，不保存文件。"""
     path = Path(path).resolve()
     if not path.is_file():
-        raise ConfigError(f"待处理文件不存在：{path}")
+        raise ConfigError(f"工作簿不存在：{path}")
     if path.stat().st_size == 0:
-        raise ConfigError(f"待处理文件为空：{path}")
+        raise ConfigError(f"工作簿为空：{path}")
 
     pythoncom, app = _open_excel(engine)
     book = None
@@ -110,7 +110,7 @@ def read_workbook(path: Path, engine: str = DEFAULT_ENGINE) -> WorkbookData:
             )
         except Exception as exc:
             raise ConfigError(
-                f"Excel 无法打开待处理文件：{path}（{path.stat().st_size} 字节）；"
+                f"Excel 无法打开工作簿：{path}（{path.stat().st_size} 字节）；"
                 "请确认文件未被其他程序占用"
             ) from exc
 
@@ -232,3 +232,88 @@ def find_sheet(book: WorkbookData, keyword: str) -> SheetData:
         names = "、".join(sheet.name for sheet in matched)
         raise ConfigError(f"包含“{keyword}”的工作表不唯一：{names}")
     return matched[0]
+
+
+def _label_cell(sheet, label):
+    """按单元格文字定位标签，返回标签右侧第一个单元格（标签为合并区域时取合并区右侧）。"""
+    used = sheet.UsedRange
+    first_row, last_row = int(used.Row), int(used.Row) + int(used.Rows.Count) - 1
+    first_col, last_col = int(used.Column), int(used.Column) + int(used.Columns.Count) - 1
+    for row in range(first_row, last_row + 1):
+        for col in range(first_col, last_col + 1):
+            value = sheet.Cells(row, col).Value
+            if value is None or str(value).strip() != label:
+                continue
+            area = sheet.Cells(row, col).MergeArea
+            return sheet.Cells(row, int(area.Column) + int(area.Columns.Count))
+    raise ConfigError(f"{sheet.Name} 未找到“{label}”单元格")
+
+
+def update_labels(path: Path, sheet_name: str, labels: Iterable[Tuple[str, object, Optional[str]]],
+                  engine: str = DEFAULT_ENGINE) -> int:
+    """按文字动态定位标签并写入其右侧单元格，重算后保存。
+
+    labels 为 (标签文字, 值, 数字格式) 序列，不依赖固定行列；标签在合并区域内时
+    写入合并区右侧单元格。返回写入的标签数量。
+    """
+    path = Path(path).resolve()
+    labels = list(labels)
+    if not labels:
+        return 0
+    if not path.is_file():
+        raise ConfigError(f"待更新文件不存在：{path}")
+
+    pythoncom, app = _open_excel(engine)
+    book = None
+    try:
+        try:
+            book = app.Workbooks.Open(
+                Filename=str(path),
+                UpdateLinks=0,
+                ReadOnly=False,
+                IgnoreReadOnlyRecommended=True,
+                AddToMru=False,
+            )
+        except Exception as exc:
+            raise ConfigError(f"Excel 无法打开待更新文件：{path}") from exc
+        if book.ReadOnly:
+            raise ConfigError("待更新文件被占用或为只读，无法保存更新结果")
+        try:
+            sheet = book.Worksheets(sheet_name)
+        except Exception as exc:
+            raise ConfigError(f"工作簿缺少工作表：{sheet_name}") from exc
+
+        for label, value, number_format in labels:
+            cell = _label_cell(sheet, label)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                cell.ClearContents()
+            elif isinstance(value, (date, datetime)):
+                cell.Value2 = _date_serial(value)
+                cell.NumberFormat = number_format or "yyyy-m-d"
+            else:
+                if hasattr(value, "to_eng_string"):
+                    value = float(value)
+                cell.Value = value
+                if number_format:
+                    cell.NumberFormat = number_format
+            logger.info(
+                f"已写入 {sheet_name}!R{int(cell.Row)}C{int(cell.Column)} "
+                f"“{label}” = {value!r}"
+            )
+
+        try:
+            app.Calculate()
+        except Exception as exc:
+            logger.warning(f"写入后重算失败：{exc}")
+        book.Save()
+        logger.info(f"已保存更新：{path}（{len(labels)} 个标签）")
+        return len(labels)
+    finally:
+        try:
+            if book is not None:
+                book.Close(SaveChanges=False)
+        finally:
+            try:
+                app.Quit()
+            finally:
+                pythoncom.CoUninitialize()

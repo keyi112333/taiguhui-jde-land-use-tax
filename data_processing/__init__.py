@@ -9,6 +9,7 @@ from data_processing.excel_com import (
     WorkbookData,
     find_sheet,
     read_workbook,
+    update_labels,
     write_cells,
 )
 
@@ -18,5 +19,6 @@ __all__ = [
     'WorkbookData',
     'find_sheet',
     'read_workbook',
+    'update_labels',
     'write_cells',
 ]

@@ -9,6 +9,7 @@ from config.config import SYSTEM_CONFIG_PATH, USER_CONFIG_PATH
 from init.init import initEnv
 from log.loggingConfig import logger
 from utils.helpers import format_time
+from utils.period_dialog import ask_accounting_period
 from workflows.land_tax_flow.main_task import JDEMainTask
 
 
@@ -28,6 +29,14 @@ def main():
     else:
         logger.error(f"配置文件不存在，请检查路径是否正确: {config_path}")
         raise Exception(f"配置文件不存在，请检查路径是否正确: {config_path}")
+
+    # 运行前弹窗输入会计期间：填写值优先，留空或超时按自然月运行。
+    period = ask_accounting_period()
+    config.set("土地使用税配置.会计期间", period or "")
+    if period:
+        logger.info(f"本次运行会计期间：{period}（弹窗输入）")
+    else:
+        logger.info("未输入会计期间，按自然月运行")
 
     initEnv()
 

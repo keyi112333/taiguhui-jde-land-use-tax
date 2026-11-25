@@ -10,9 +10,9 @@ from openpyxl.utils import get_column_letter
 from log.loggingConfig import logger
 
 
-RESULT_FILE_TEMPLATE = "土地使用税运行结果表-{year}.xlsx"
+RESULT_FILE_TEMPLATE = "土地使用税计税表运行结果表-{year}.xlsx"
 RESULT_HEADERS = (
-    "会计期间", "公司",  "分录批号",
+    "会计期间", "公司", "公司代码", "分录批号",
     "运行结果", "异常情况", "运行开始时间", "运行结束时间",
 )
 RESULT_WIDTHS = (12, 16, 12, 20, 14, 40, 20, 20)
@@ -71,7 +71,7 @@ def append_run_result(config, record, year=None):
 def build_notification_message(company, period, total, success, failed, filename):
     """按约定格式生成企业微信通知文本。"""
     return (
-        f"各位好，请查收 {company}_土地使用税运行结果，谢谢！\n"
+        f"各位好，请查收 {company}_土地使用税计税表更新与分录录入，谢谢！\n"
         f"本次处理会计期间：{period}\n"
         f"总处理行数：{total} 行，处理成功：{success} 个，"
         f"失败/待补运行：{failed} 个，具体查看《{filename}》"
